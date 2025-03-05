@@ -32,10 +32,14 @@ export function createShuffledDeck() {
 
 export const deck = writable(createShuffledDeck()); 
 export const playerHand = writable([] as { type: string; value: number }[]);
-export const discardPile = writable([] as { type: string; value: number }[]);
-export const playArea = writable([] as { type: string; value: number }[]);
-export const currentPlayer = writable(1); // Track whose turn it is (1 or 2)
+// export const discardPile = writable([] as { type: string; value: number }[]);
+// export const playArea = writable([] as { type: string; value: number }[]);
 export const playerDistances = writable({ 1: 0, 2: 0 }); // Track distance for each player
 export const playerStatus = writable({ 1: "OK", 2: "OK" }); // "OK" or "Stopped" by a hazard
 export const gameOver = writable(false);
 export const winner = writable<number | null>(null);
+
+export const currentPlayer = writable("");  // Default empty, updates from Firestore
+export const playArea = writable([]);
+export const discardPile = writable([]);
+export const playerHands = writable({});
