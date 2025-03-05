@@ -1,4 +1,8 @@
+# node crap
 node_modules
+
+# config
+/src/lib/firebase.ts
 
 # Output
 .output
