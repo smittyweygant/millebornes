@@ -3,6 +3,7 @@
     import { collection, addDoc, doc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
     import { deck, playerHand, playerHands, discardPile, playArea, playerDistances, playerStatus, currentPlayer, gameOver, winner } from "$lib/gameStore";
     import Card from "$lib/Card.svelte";
+    // import type { Card } from "$lib/gameStore";
   
     let gameId = "";
     let joinGameId = "";
@@ -14,9 +15,10 @@
         const gameRef = await addDoc(collection(db, "games"), {
             players: ["player1"],  
             deck: $deck,
+            discardPile: [],  
+            playerHands: { player1: [] },
             playArea: { player1: [] },
-            discardPile: $discardPile,
-            playerHands: { player1: [] },  
+            playerStatus: { player1: "moving" },  // 🔹 Initialize playerStatus
             currentPlayer: "player1",
             createdAt: new Date(),
         });
@@ -27,60 +29,58 @@
 
         await updateDoc(doc(db, "games", gameId), {
             [`playerHands.player1`]: [],
-            [`playArea.player1`]: []
+            [`playArea.player1`]: [],
+            [`playerStatus.player1`]: "moving" // 🔹 Ensure it's initialized
         });
-
-        console.log("Game created with ID:", gameId, "with game creator as player1");
 
         onSnapshot(doc(db, "games", gameId), (snapshot) => {
             const updatedGame = snapshot.data();
-
             deck.set(updatedGame.deck);
             discardPile.set(updatedGame.discardPile);
             playerHands.set(updatedGame.playerHands);
             playArea.set(updatedGame.playArea);
+            playerStatus.set(updatedGame.playerStatus || {});  // 🔹 Ensure status is always an object
             currentPlayer.set(updatedGame.currentPlayer || "");
-
-            console.log("Synced game state (Creator View):", updatedGame);
         });
     }
 
   
     async function joinGame() {
-      const gameRef = doc(db, "games", joinGameId);
-      const gameSnap = await getDoc(gameRef);
-  
-      if (gameSnap.exists()) {
-        gameId = joinGameId;
-        gameData = gameSnap.data();
-  
-        if (gameData.players.length < 4) {
-          playerId = `player${gameData.players.length + 1}`;
+        const gameRef = doc(db, "games", joinGameId);
+        const gameSnap = await getDoc(gameRef);
 
-          await updateDoc(gameRef, {
-            players: arrayUnion(playerId),
-            [`playerHands.${playerId}`]: [],
-            [`playArea.${playerId}`]: []
-          });
+        if (gameSnap.exists()) {
+            gameId = joinGameId;
+            const gameData = gameSnap.data();
 
-          console.log(`Joined game as ${playerId}`);
+            if (gameData.players.length < 4) { // 🔹 Max 4 players
+                playerId = `player${gameData.players.length + 1}`;
+
+            await updateDoc(gameRef, {
+                players: arrayUnion(playerId),
+                [`playerHands.${playerId}`]: [],
+                [`playArea.${playerId}`]: [],
+                [`playerStatus.${playerId}`]: "moving"  // 🔹 Ensure new players have a status
+            });
+
+            console.log(`Joined game as ${playerId}`);
+            } else {
+            console.error("Game is full!");
+            }
+
+            // 🔹 Start Firestore listener
+            onSnapshot(gameRef, (snapshot) => {
+                const updatedGame = snapshot.data();
+                deck.set(updatedGame.deck);
+                discardPile.set(updatedGame.discardPile);
+                playerHands.set(updatedGame.playerHands);
+                playArea.set(updatedGame.playArea);
+                playerStatus.set(updatedGame.playerStatus || {}); // 🔹 Ensure playerStatus is always set
+                currentPlayer.set(updatedGame.currentPlayer || "");
+            });
         } else {
-          console.error("Game is full!");
+            console.error("Game not found!");
         }
-  
-        onSnapshot(doc(db, "games", gameId), (snapshot) => {
-            const updatedGame = snapshot.data();
-            
-            deck.set(updatedGame.deck);
-            playArea.set(updatedGame.playArea);
-            discardPile.set(updatedGame.discardPile);
-            playerHands.set(updatedGame.playerHands);
-            currentPlayer.set(updatedGame.currentPlayer || "");
-            console.log("Synced updatedGame state (joined player):", updatedGame.currentPlayer);
-        });
-      } else {
-        console.error("Game not found!");
-      }
     }
   
     async function drawCard() {
@@ -111,30 +111,71 @@
     }
   
     async function playCard(index: number) {
+        console.log("Attempting to play card:", index);
         if ($gameOver || !playerId || $currentPlayer !== playerId) return; // Only active player can play
 
         playerHand.update(hand => {
             const card = hand[index];
+            console.log("Card type:", card.type, "Card value:", card.value);
 
-            // 🔹 Ensure `playArea[playerId]` exists before updating it
-            const updatedPlayArea = { ...$playArea };
-            if (!updatedPlayArea[playerId]) {
-                updatedPlayArea[playerId] = [];
+            // 🔹 Handle Distance Cards
+            if (card.type === "distance") {
+                console.log("Playing Distance card:", card);
+                
+                // Ensure playArea for player exists and update it
+                console.log("Existing $playArea:", $playArea);
+                const updatedPlayArea = { ...$playArea };
+                if (!updatedPlayArea[playerId]) {
+                    updatedPlayArea[playerId] = [];
+                }
+                updatedPlayArea[playerId] = [...updatedPlayArea[playerId], card];
+
+                const gameRef = doc(db, "games", gameId);
+                console.log("Updating firebase with playArea cards:", updatedPlayArea[playerId]);
+                updateDoc(gameRef, {
+                    [`playArea.${playerId}`]: updatedPlayArea[playerId], // 🔹 Store in per-player play area
+                    [`playerHands.${playerId}`]: hand.filter((_, i) => i !== index) // Remove from hand
+                });
+
+                return hand.filter((_, i) => i !== index);
             }
-            updatedPlayArea[playerId] = [...updatedPlayArea[playerId], card];
 
-            // 🔹 Update Firestore with the new play area and player's hand
+            // 🔹 Enforce hazard rules
+            if (card.type === "hazard") {
+                if ($playerStatus[playerId] === "protected") {
+                    console.log("Player is protected from this hazard!");
+                    return hand;
+                }
+                playerStatus.update(status => ({ ...status, [playerId]: card.effect }));
+            }
+
+            // 🔹 Enforce remedy rules
+            if (card.type === "remedy") {
+                if ($playerStatus[playerId] === hazardRemedyPairs[card.effect]) {
+                    playerStatus.update(status => ({ ...status, [playerId]: "moving" }));
+                } else {
+                    console.log("This remedy does not match the current hazard.");
+                    return hand;
+                }
+            }
+
+            // 🔹 Enforce safety cards
+            if (card.type === "safety") {
+                playerStatus.update(status => ({ ...status, [playerId]: "protected" }));
+            }
+
+            // 🔹 Update Firestore with new status
             const gameRef = doc(db, "games", gameId);
             updateDoc(gameRef, {
-                [`playArea.${playerId}`]: updatedPlayArea[playerId], // 🔹 Store in per-player play area
-                [`playerHands.${playerId}`]: hand.filter((_, i) => i !== index) // Remove from hand
+                [`playerStatus.${playerId}`]: $playerStatus[playerId]
             });
 
             return hand.filter((_, i) => i !== index);
         });
 
         endTurn();  // 🔹 Switch turn after playing a card
-    }
+        }
+
 
 
     async function discardCard(index: number) {
@@ -190,9 +231,36 @@
       <h2>Game ID: {gameId}</h2>
       <h2>Current Player: Player {$currentPlayer}</h2>
       <h2 class="turn-indicator">
-        Current Turn: 
-        <span class="active-player">{$currentPlayer.replace("player", "Player ")}</span>
-      </h2>      
+        Current Turn: <span class="active-player">{$currentPlayer.replace("player", "Player ")}</span>
+      </h2>
+      
+      <!-- 🔹 Player Status Section -->
+      <section class="player-status">
+        <h2>Player Status</h2>
+        {#each Object.keys($playerStatus) as player}
+          <div class="player-section">
+            <h3>{player.replace("player", "Player ")}</h3>
+            <p>Status: <span class="status-badge {$playerStatus[player]}">{$playerStatus[player]}</span></p>
+          </div>
+        {/each}
+      </section>
+      
+      <section>
+        <h2>Play Area</h2>
+        <div class="players">
+          {#each Object.keys($playerHands) as player}
+            <div class="player-section {player === $currentPlayer ? 'active' : ''}">
+              <h3>{player.replace("player", "Player ")}</h3>
+              <div class="play-area">
+                {#each $playArea[player] || [] as card}
+                  <Card card={card} />
+                {/each}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </section>
+            
   
       <section>
         <h2>Draw Pile ({$deck.length} cards remaining)</h2>
@@ -212,24 +280,7 @@
             </div>
           {/each}
         </div>
-      </section>
-      
-  
-      <section>
-        <h2>Play Area</h2>
-        <div class="players">
-          {#each Object.keys($playerHands) as player}
-            <div class="player-section {player === $currentPlayer ? 'active' : ''}">
-              <h3>{player.replace("player", "Player ")}</h3>
-              <div class="play-area">
-                {#each $playArea[player] || [] as card}
-                  <Card card={card} />
-                {/each}
-              </div>
-            </div>
-          {/each}
-        </div>
-      </section>      
+      </section>     
       
       <section>
         <h2>Discard Pile</h2>
@@ -282,4 +333,14 @@
         border: 2px solid #ff5722; /* Highlight active player's section */
         background-color: rgba(255, 87, 34, 0.1);
         }
+
+        .status-badge {
+        font-weight: bold;
+        padding: 4px 8px;
+        border-radius: 5px;
+        }
+        .status-badge.moving { color: green; }
+        .status-badge.stopped { color: red; }
+        .status-badge.protected { color: blue; }
+    
     </style>
