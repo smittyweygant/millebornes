@@ -1,9 +1,8 @@
 <script lang="ts">
     import { db } from "$lib/firebase";
     import { collection, addDoc, doc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
-    import { deck, playerHand, playerHands, discardPile, playArea, playerDistances, playerStatus, currentPlayer, gameOver, winner } from "$lib/gameStore";
+    import { deck, playerHand, playerHands, discardPile, playArea, playerDistances, playerStatus, currentPlayer, gameOver, winner, hazardRemedyPairs, safetyProtections } from "$lib/gameStore";
     import Card from "$lib/Card.svelte";
-    // import type { Card } from "$lib/gameStore";
   
     let gameId = "";
     let joinGameId = "";
@@ -12,6 +11,7 @@
     let playerId = "";
   
     async function createGame() {
+
         const gameRef = await addDoc(collection(db, "games"), {
             players: ["player1"],  
             deck: $deck,
@@ -27,10 +27,12 @@
         isHost = true;
         playerId = "player1";
 
+        console.debug("Deck:", $deck)
+
         await updateDoc(doc(db, "games", gameId), {
             [`playerHands.player1`]: [],
             [`playArea.player1`]: [],
-            [`playerStatus.player1`]: "moving" // 🔹 Ensure it's initialized
+            [`playerStatus.player1`]: "moving" 
         });
 
         onSnapshot(doc(db, "games", gameId), (snapshot) => {
@@ -39,19 +41,18 @@
             discardPile.set(updatedGame.discardPile);
             playerHands.set(updatedGame.playerHands);
             playArea.set(updatedGame.playArea);
-            playerStatus.set(updatedGame.playerStatus || {});  // 🔹 Ensure status is always an object
+            playerStatus.set(updatedGame.playerStatus || {});
             currentPlayer.set(updatedGame.currentPlayer || "");
         });
     }
 
-  
     async function joinGame() {
         const gameRef = doc(db, "games", joinGameId);
         const gameSnap = await getDoc(gameRef);
 
         if (gameSnap.exists()) {
             gameId = joinGameId;
-            const gameData = gameSnap.data();
+            gameData = gameSnap.data();
 
             if (gameData.players.length < 4) { // 🔹 Max 4 players
                 playerId = `player${gameData.players.length + 1}`;
@@ -113,17 +114,22 @@
     async function playCard(index: number) {
         console.log("Attempting to play card:", index);
         if ($gameOver || !playerId || $currentPlayer !== playerId) return; // Only active player can play
+        let updatedPlayerStatus = $playerStatus;
 
         playerHand.update(hand => {
             const card = hand[index];
-            console.log("Card type:", card.type, "Card value:", card.value);
+            console.log("Card played:", card.type, "Card value:", card.value);
+
+            // 🔹 Determine the opponent (target player)
+            const allPlayers = Object.keys($playerHands);
+            const targetPlayer = allPlayers.find(p => p !== playerId) || null;
+            
+            console.log("Target Player:", targetPlayer);
 
             // 🔹 Handle Distance Cards
             if (card.type === "distance") {
                 console.log("Playing Distance card:", card);
-                
-                // Ensure playArea for player exists and update it
-                console.log("Existing $playArea:", $playArea);
+
                 const updatedPlayArea = { ...$playArea };
                 if (!updatedPlayArea[playerId]) {
                     updatedPlayArea[playerId] = [];
@@ -131,51 +137,62 @@
                 updatedPlayArea[playerId] = [...updatedPlayArea[playerId], card];
 
                 const gameRef = doc(db, "games", gameId);
-                console.log("Updating firebase with playArea cards:", updatedPlayArea[playerId]);
                 updateDoc(gameRef, {
-                    [`playArea.${playerId}`]: updatedPlayArea[playerId], // 🔹 Store in per-player play area
-                    [`playerHands.${playerId}`]: hand.filter((_, i) => i !== index) // Remove from hand
+                    [`playArea.${playerId}`]: updatedPlayArea[playerId], 
+                    [`playerHands.${playerId}`]: hand.filter((_, i) => i !== index)
                 });
 
                 return hand.filter((_, i) => i !== index);
             }
 
-            // 🔹 Enforce hazard rules
+            // 🔹 Handle Hazard Cards
             if (card.type === "hazard") {
-                if ($playerStatus[playerId] === "protected") {
-                    console.log("Player is protected from this hazard!");
+                if (targetPlayer) {
+                    const protection = safetyProtections[card.effect];
+
+                    if ($playerStatus[targetPlayer] === protection) {
+                        console.log(`${targetPlayer} is protected from ${card.effect} by ${protection}`);
+                        return hand; // Block hazard
+                    }
+
+                    updatedPlayerStatus[targetPlayer] = card.effect; // Apply hazard effect
+
+                    console.log(`Applied hazard to ${targetPlayer}:`, card.effect);
+                } else {
+                    console.error("No valid target player for hazard.");
                     return hand;
                 }
-                playerStatus.update(status => ({ ...status, [playerId]: card.effect }));
             }
 
-            // 🔹 Enforce remedy rules
+            // 🔹 Handle Remedy Cards
             if (card.type === "remedy") {
-                if ($playerStatus[playerId] === hazardRemedyPairs[card.effect]) {
-                    playerStatus.update(status => ({ ...status, [playerId]: "moving" }));
+                if (hazardRemedyPairs[updatedPlayerStatus[playerId]] === card.effect) {
+                    updatedPlayerStatus[playerId] = "moving"; // Remove hazard
                 } else {
                     console.log("This remedy does not match the current hazard.");
                     return hand;
                 }
             }
 
-            // 🔹 Enforce safety cards
+            // 🔹 Handle Safety Cards
             if (card.type === "safety") {
-                playerStatus.update(status => ({ ...status, [playerId]: "protected" }));
+                updatedPlayerStatus[playerId] = card.effect; // Now stores the safety effect
             }
 
-            // 🔹 Update Firestore with new status
+            // 🔹 Update Firestore
             const gameRef = doc(db, "games", gameId);
             updateDoc(gameRef, {
-                [`playerStatus.${playerId}`]: $playerStatus[playerId]
-            });
+                [`playerStatus.${playerId}`]: updatedPlayerStatus[playerId] || "moving",
+                ...(targetPlayer ? { [`playerStatus.${targetPlayer}`]: updatedPlayerStatus[targetPlayer] } : {})
+            }).then(() => {
+                console.log(`Updated Firestore with player status:`, updatedPlayerStatus);
+            }).catch(error => console.error("Error updating Firestore:", error));
 
             return hand.filter((_, i) => i !== index);
         });
 
-        endTurn();  // 🔹 Switch turn after playing a card
-        }
-
+        endTurn();  
+    }
 
 
     async function discardCard(index: number) {
@@ -200,8 +217,6 @@
         endTurn();  // 🔹 Switch turn after discarding
     }
 
-
-  
     async function endTurn() {
       const gameRef = doc(db, "games", gameId);
       const gameSnap = await getDoc(gameRef);
