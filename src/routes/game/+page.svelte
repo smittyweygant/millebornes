@@ -1,7 +1,9 @@
 <script lang="ts">
     import { db } from "$lib/firebase";
     import { collection, addDoc, doc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
-    import { deck, playerHand, playerHands, discardPile, playArea, playerDistances, playerStatus, currentPlayer, gameOver, winner, hazardRemedyPairs, safetyProtections } from "$lib/gameStore";
+    import { deck, discardPile, gameOver, winner } from "$lib/gameStore"; 
+    import { playerHand, playerHands, playArea, playerDistances, playerState, currentPlayer } from "$lib/gameStore"; 
+    import { hazardRemedyPairs, safetyProtections, activeHazards, activeSafeties } from "$lib/gameStore";
     import Card from "$lib/Card.svelte";
   
     let gameId = "";
@@ -11,14 +13,15 @@
     let playerId = "";
   
     async function createGame() {
-
         const gameRef = await addDoc(collection(db, "games"), {
             players: ["player1"],  
             deck: $deck,
             discardPile: [],  
             playerHands: { player1: [] },
             playArea: { player1: [] },
-            playerStatus: { player1: "moving" },  // 🔹 Initialize playerStatus
+            playerState: { player1: "moving" },
+            activeHazards: { player1: [] },
+            activeSafeties: { player1: [] },
             currentPlayer: "player1",
             createdAt: new Date(),
         });
@@ -32,7 +35,9 @@
         await updateDoc(doc(db, "games", gameId), {
             [`playerHands.player1`]: [],
             [`playArea.player1`]: [],
-            [`playerStatus.player1`]: "moving" 
+            [`playerState.player1`]: "moving",
+            [`activeHazards.player1`]: [],
+            [`activeSafeties.player1`]: []
         });
 
         onSnapshot(doc(db, "games", gameId), (snapshot) => {
@@ -41,7 +46,9 @@
             discardPile.set(updatedGame.discardPile);
             playerHands.set(updatedGame.playerHands);
             playArea.set(updatedGame.playArea);
-            playerStatus.set(updatedGame.playerStatus || {});
+            playerState.set(updatedGame.playerState || {});
+            activeHazards.set(updatedGame.activeHazards || {});
+            activeSafeties.set(updatedGame.activeSafeties || {});
             currentPlayer.set(updatedGame.currentPlayer || "");
         });
     }
@@ -61,7 +68,9 @@
                 players: arrayUnion(playerId),
                 [`playerHands.${playerId}`]: [],
                 [`playArea.${playerId}`]: [],
-                [`playerStatus.${playerId}`]: "moving"  // 🔹 Ensure new players have a status
+                [`playerState.${playerId}`]: "moving",  // 🔹 Ensure new players have a status
+                [`activeHazards.${playerId}`]: [],
+                [`activeSafeties.${playerId}`]: []
             });
 
             console.log(`Joined game as ${playerId}`);
@@ -76,7 +85,9 @@
                 discardPile.set(updatedGame.discardPile);
                 playerHands.set(updatedGame.playerHands);
                 playArea.set(updatedGame.playArea);
-                playerStatus.set(updatedGame.playerStatus || {}); // 🔹 Ensure playerStatus is always set
+                playerState.set(updatedGame.playerState || {});
+                activeHazards.set(updatedGame.activeHazards || {});
+                activeSafeties.set(updatedGame.activeSafeties || {});
                 currentPlayer.set(updatedGame.currentPlayer || "");
             });
         } else {
@@ -113,87 +124,108 @@
   
     async function playCard(index: number) {
         console.log("Attempting to play card:", index);
-        if ($gameOver || !playerId || $currentPlayer !== playerId) return; // Only active player can play
-        let updatedPlayerStatus = $playerStatus;
+        if ($gameOver || !playerId || $currentPlayer !== playerId) return;
+        let turnShouldEnd = true;
 
         playerHand.update(hand => {
             const card = hand[index];
-            console.log("Card played:", card.type, "Card value:", card.value);
+            console.log(`Card played: ${card.type}, Card value: ${card.value}, Card Effect: ${card.effect}`);
 
-            // 🔹 Determine the opponent (target player)
+            // Identify targetPlayer for hazard cards
             const allPlayers = Object.keys($playerHands);
             const targetPlayer = allPlayers.find(p => p !== playerId) || null;
-            
-            console.log("Target Player:", targetPlayer);
 
-            // 🔹 Handle Distance Cards
+            // Handle Distance Cards
             if (card.type === "distance") {
-                console.log("Playing Distance card:", card);
-
-                const updatedPlayArea = { ...$playArea };
-                if (!updatedPlayArea[playerId]) {
-                    updatedPlayArea[playerId] = [];
+                if ($playerState[playerId] !== "moving" ) {
+                    console.error("Cannot play Distance card while blocked!");
+                    turnShouldEnd = false;
+                    return hand;
                 }
-                updatedPlayArea[playerId] = [...updatedPlayArea[playerId], card];
-
-                const gameRef = doc(db, "games", gameId);
-                updateDoc(gameRef, {
-                    [`playArea.${playerId}`]: updatedPlayArea[playerId], 
+                const updatedPlayArea = { ...$playArea };
+                updatedPlayArea[playerId] = [...(updatedPlayArea[playerId] || []), card];
+                updateDoc(doc(db, "games", gameId), {
+                    [`playArea.${playerId}`]: updatedPlayArea[playerId],
                     [`playerHands.${playerId}`]: hand.filter((_, i) => i !== index)
                 });
-
                 return hand.filter((_, i) => i !== index);
             }
 
-            // 🔹 Handle Hazard Cards
-            if (card.type === "hazard") {
-                if (targetPlayer) {
-                    const protection = safetyProtections[card.effect];
-
-                    if ($playerStatus[targetPlayer] === protection) {
-                        console.log(`${targetPlayer} is protected from ${card.effect} by ${protection}`);
-                        return hand; // Block hazard
-                    }
-
-                    updatedPlayerStatus[targetPlayer] = card.effect; // Apply hazard effect
-
-                    console.log(`Applied hazard to ${targetPlayer}:`, card.effect);
-                } else {
-                    console.error("No valid target player for hazard.");
+            // Handle Hazard Cards
+            if (card.type === "hazard" && targetPlayer) {
+                const protection = safetyProtections[card.effect];
+                console.log("Target Player:", targetPlayer);
+                if ($activeSafeties[targetPlayer]?.includes(protection)) {
+                    console.error(`${targetPlayer} is protected from ${card.effect} by ${protection}`);
+                    turnShouldEnd = false;
                     return hand;
                 }
+                activeHazards.update(hazards => {
+                    hazards[targetPlayer] = [...(hazards[targetPlayer] || []), card.effect];
+                    updateDoc(doc(db, "games", gameId), {
+                        [`activeHazards.${targetPlayer}`]: hazards[targetPlayer],
+                        [`playerState.${targetPlayer}`]: "blocked!" 
+                    });
+                    console.log(`${targetPlayer} has been blocked by ${card.effect}`);
+                    return hazards;
+                });
             }
 
-            // 🔹 Handle Remedy Cards
-            if (card.type === "remedy") {
-                if (hazardRemedyPairs[updatedPlayerStatus[playerId]] === card.effect) {
-                    updatedPlayerStatus[playerId] = "moving"; // Remove hazard
+            // Handle Remedy Cards
+            if (card.type === "remedy" ) {
+                console.log(`${card.type} card played:`, "Effect:", card.effect );
+                const hazardToRemove = Object.keys(hazardRemedyPairs).find(hazard => hazardRemedyPairs[hazard] === card.effect);
+                console.log("Hazard Matched to Remove:", hazardToRemove )
+                if ($activeHazards[playerId]?.includes(hazardToRemove)) {
+                    activeHazards.update(hazards => {
+                        hazards[playerId] = hazards[playerId].filter(h => h !== hazardToRemove);
+                        playerState.update(state => ({ ...state, [playerId]: "moving" }));
+                        updateDoc(doc(db, "games", gameId), {
+                            [`activeHazards.${playerId}`]: hazards[playerId],
+                            [`playerState.${playerId}`]: "moving" 
+                        });
+                        console.log(`${playerId} applied remedy: ${card.effect}`);
+                        return hazards;
+                    });
+
                 } else {
                     console.log("This remedy does not match the current hazard.");
+                    turnShouldEnd = false;
                     return hand;
                 }
             }
 
-            // 🔹 Handle Safety Cards
+            // Handle Safety Cards
             if (card.type === "safety") {
-                updatedPlayerStatus[playerId] = card.effect; // Now stores the safety effect
+                console.log(`Safety card played: ${card.type} : ${card.effect}`);
+                activeSafeties.update(safeties => {
+                    safeties[playerId] = [...(safeties[playerId] || []), card.effect];
+                    updateDoc(doc(db, "games", gameId), {
+                        [`activeSafeties.${playerId}`]: safeties[playerId]
+                    });
+                    return safeties;    
+                });
+                // Check if a matching hazard exists, and remove it
+                const protections = $activeSafeties[playerId];
+                console.log("Current Safeties after playing card:", protections)
+                // Enumerate hazards, check if the new safety protects against it
+                // check the array of active hazards, if != <>
+                // check hazard mapping to protection 
+                // const hazardToRemove = Object.keys(hazardRemedyPairs).find(hazard => hazardRemedyPairs[hazard] === card.effect);
+                //     if ($activeHazards[targetPlayer]?.includes(protection)) {
+                //         console.error(`${targetPlayer} is now protected from ${card.effect} by ${protection}`);
+                //         turnShouldEnd = false;
+                //         return hand;
+                //     }
+                    
             }
-
-            // 🔹 Update Firestore
-            const gameRef = doc(db, "games", gameId);
-            updateDoc(gameRef, {
-                [`playerStatus.${playerId}`]: updatedPlayerStatus[playerId] || "moving",
-                ...(targetPlayer ? { [`playerStatus.${targetPlayer}`]: updatedPlayerStatus[targetPlayer] } : {})
-            }).then(() => {
-                console.log(`Updated Firestore with player status:`, updatedPlayerStatus);
-            }).catch(error => console.error("Error updating Firestore:", error));
-
             return hand.filter((_, i) => i !== index);
         });
 
-        endTurn();  
+        if (turnShouldEnd) {
+            endTurn();
+        }
     }
-
 
     async function discardCard(index: number) {
         if ($gameOver || !playerId || $currentPlayer !== playerId) return; // Only active player can discard
@@ -227,8 +259,7 @@
       await updateDoc(gameRef, {
         currentPlayer: nextPlayer
       });
-  
-      console.log(`Turn switched to: ${nextPlayer}`);
+      console.log(`Turn switched to:, ${nextPlayer}`);
     }
   </script>
   
@@ -252,10 +283,10 @@
       <!-- 🔹 Player Status Section -->
       <section class="player-status">
         <h2>Player Status</h2>
-        {#each Object.keys($playerStatus) as player}
+        {#each Object.keys($playerState) as player}
           <div class="player-section">
             <h3>{player.replace("player", "Player ")}</h3>
-            <p>Status: <span class="status-badge {$playerStatus[player]}">{$playerStatus[player]}</span></p>
+            <p>Status: <span class="status-badge {$playerState[player]}">{$playerState[player]}</span></p>
           </div>
         {/each}
       </section>
@@ -263,60 +294,86 @@
       <section>
         <h2>Play Area</h2>
         <div class="players">
-          {#each Object.keys($playerHands) as player}
-            <div class="player-section {player === $currentPlayer ? 'active' : ''}">
-              <h3>{player.replace("player", "Player ")}</h3>
-              <div class="play-area">
-                {#each $playArea[player] || [] as card}
-                  <Card card={card} />
-                {/each}
-              </div>
-            </div>
-          {/each}
+            {#each Object.keys($playerHands) as player}
+                <div class="player-section {player === $currentPlayer ? 'active' : ''}">
+                    <h3>{player.replace("player", "Player ")}</h3>
+
+                    <!-- 🔹 New Safety Protections Section -->
+                    {#if $activeSafeties[player] && $activeSafeties[player].length > 0}
+                        <section class="safety-protections">
+                            <h4>Safety Protections</h4>
+                            <div class="safety-cards">
+                                {#each $activeSafeties[player] as safety}
+                                    <Card card={{ type: "safety", effect: safety }} />
+                                {/each}
+                            </div>
+                        </section>
+                    {/if}
+                    {#if $activeHazards[player] && $activeHazards[player].length > 0}
+                    <section class="hazards">
+                        <h4>Hazards!</h4>
+                        <div class="hazard-cards">
+                            {#each $activeHazards[player] as hazard}
+                                <Card card={{ effect: hazard }} />
+                            {/each}
+                        </div>
+                    </section>
+                    {/if}
+                    {#if $playArea[player] && $playArea[player].length > 0}
+                        <section class="play-area">
+                            <h4>Distance</h4>
+                            <div class="play-area">
+                                {#each $playArea[player] || [] as card}
+                                    <Card card={card} />
+                                {/each}
+                            </div>
+                        </section>
+                    {/if}
+                </div>
+            {/each}
         </div>
-      </section>
-            
-  
-      <section>
+        </section>
+    
+        <section>
         <h2>Draw Pile ({$deck.length} cards remaining)</h2>
         <button on:click={drawCard}>Draw a Card</button>
-      </section>
-  
-      <section>
+        </section>
+
+        <section>
         <h2>Player Hand</h2>
         <div class="hand">
-          {#each $playerHand as card, i}
+            {#each $playerHand as card, i}
             <div class="card-container">
-              <Card card={card} />
-              {#if $currentPlayer === playerId} <!-- 🔹 Only show buttons for the active player -->
+                <Card card={card} />
+                {#if $currentPlayer === playerId} <!-- 🔹 Only show buttons for the active player -->
                 <button on:click={() => playCard(i)}>Play</button>
                 <button on:click={() => discardCard(i)}>Discard</button> <!-- 🔹 Ensure discard is here -->
-              {/if}
+                {/if}
             </div>
-          {/each}
+            {/each}
         </div>
-      </section>     
-      
-      <section>
+        </section>    
+
+        <section>
         <h2>Discard Pile</h2>
         <div class="discard">
-          {#if Array.isArray($discardPile) && $discardPile.length > 0}
+            {#if Array.isArray($discardPile) && $discardPile.length > 0}
             {console.log("Discard Pile:", $discardPile)}
             <div> 
-              <Card card={$discardPile[$discardPile.length - 1]} />
+                <Card card={$discardPile[$discardPile.length - 1]} />
             </div>
-          {:else}
+            {:else}
             <p>Empty</p>
-          {/if}
+            {/if}
         </div>
-      </section>
+        </section>
       
       
     {/if}
   </main>
 
     <style lang="css">
-        .hand, .play-area, .discard {
+        .hand, .play-area, .safety-protections, .hazards, .discard {
         display: flex;
         gap: 10px;
         }
