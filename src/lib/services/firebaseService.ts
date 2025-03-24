@@ -9,7 +9,6 @@ import {
   arrayUnion 
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
-import type { Card } from "../types/cardTypes";
 import { gameStore } from "../stores/gameStore";
 import { createDeck, shuffleDeck } from "../utils/deckUtility";
 import type { GameStoreState } from "../stores/gameStore";
@@ -20,6 +19,7 @@ export class FirebaseService {
     const initialDeck = shuffleDeck(createDeck());
     
     const initialGameState: GameStoreState = {
+      createdAt: new Date(),
       players: ["player1"],
       deck: initialDeck,
       discardPile: [],
@@ -31,8 +31,7 @@ export class FirebaseService {
       currentPlayer: "player1",
       gameOver: false,
       winner: null
-    };
-    
+    };  
     const gameRef = await addDoc(collection(db, "games"), initialGameState);
     const gameId = gameRef.id;
     
@@ -64,6 +63,7 @@ export class FirebaseService {
         [`activeHazards.${playerId}`]: [],
         [`activeSafeties.${playerId}`]: []
       };
+      console.log("New Player state:", playerUpdate);
 
       await updateDoc(gameRef, playerUpdate);
       this.setupGameListener(gameId);

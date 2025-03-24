@@ -1,11 +1,8 @@
 <script lang="ts">
-    import { createEventDispatcher } from 'svelte';
-    import type { Card, CardEffect, CardType } from '../types/cardTypes';
+    import { CardType, CardCategory, type Card, type CardEffect } from '../types/cardTypes';
     
     export let card: Card | null = null;
     export let mini: boolean = false;
-    
-    const dispatch = createEventDispatcher();
     
     $: cardClasses = `
       card
@@ -14,71 +11,71 @@
     `;
     
     // Helper function to get the card icon based on effect
-    function getCardIcon(type: CardType, effect: CardEffect | undefined): string {
-      if (type === "distance") {
+    function getCardIcon(category: CardCategory, type: CardType): string {
+      if (category === "distance") {
         return `${card?.value || 0}`;
       }
       
-      switch(effect) {
+      switch(type) {
         // Hazards
-        case "accident": return '🚧';
-        case "outOfGas": return '⛽';
-        case "flatTire": return '🛞';
-        case "speedLimit": return '🐢';
-        case "stop": return '🛑';
+        case CardType.ACCIDENT: return '🚧';
+        case CardType.OUT_OF_GAS: return '⛽';
+        case CardType.FLAT_TIRE: return '🛞';
+        case CardType.SPEED_LIMIT: return '🐢';
+        case CardType.STOP: return '🛑';
         
         // Remedies
-        case "repairs": return '🔧';
-        case "gasoline": return '⛽';
-        case "spareTire": return '🛞';
-        case "endOfLimit": return '🚀';
-        case "go": return '🟢';
+        case CardType.REPAIRS: return '🔧';
+        case CardType.GASOLINE: return '⛽';
+        case CardType.SPARE_TIRE: return '🛞';
+        case CardType.END_OF_LIMIT: return '🚀';
+        case CardType.ROLL: return '🟢';
         
         // Safety
-        case "drivingAce": return '🏁';
-        case "fuelTruck": return '🔋';
-        case "punctureProof": return '🛡️';
-        case "rightOfWay": return '⭐';
+        case CardType.DRIVING_ACE: return '🏁';
+        case CardType.FUEL_TANK: return '🔋';
+        case CardType.PUNCTURE_PROOF: return '🛡️';
+        case CardType.RIGHT_OF_WAY: return '⭐';
         
         default: return '❓';
       }
     }
     
-    function getCardColor(type: CardType): string {
-      switch(type) {
-        case "hazard": return '#ff6b6b';
-        case "remedy": return '#51cf66';
-        case "safety": return '#339af0';
-        case "distance": return '#fcc419';
+    function getCardColor(category: CardCategory, type: CardType): string {
+      switch(category) {
+        case CardCategory.HAZARD: return '#ff6b6b';
+        case CardCategory.REMEDY: return '#51cf66';
+        case CardCategory.SAFETY: return '#339af0';
+        case CardCategory.DISTANCE: return '#fcc419';
         default: return '#adb5bd';
       }
     }
 
-    function getCardName(type: CardType, effect: CardEffect | undefined): string {
-      if (type === "distance") {
+    function getCardName(category: CardCategory, cardType: CardType): string {
+      if (category === "distance") {
         return `${card?.value || 0} Miles`;
       }
       
-      switch(effect) {
+      switch(cardType) {
         // Hazards
-        case "accident": return "Accident";
-        case "outOfGas": return "Out of Gas";
-        case "flatTire": return "Flat Tire";
-        case "speedLimit": return "Speed Limit";
-        case "stop": return "Stop";
+        case CardType.ACCIDENT: return "Accident";
+        case CardType.OUT_OF_GAS: return "Out of Gas";
+        case CardType.FLAT_TIRE: return "Flat Tire";
+        case CardType.SPEED_LIMIT: return "Speed Limit";
+        case CardType.STOP: return "Stop";
         
         // Remedies
-        case "repairs": return "Repairs";
-        case "gasoline": return "Gasoline";
-        case "spareTire": return "Spare Tire";
-        case "endOfLimit": return "End of Limit";
-        case "go": return "Roll";
+        case CardType.REPAIRS: return "Repairs";
+        case CardType.GASOLINE: return "Gasoline";
+        case CardType.SPARE_TIRE: return "Spare Tire";
+        case CardType.END_OF_LIMIT: return "End of Limit";
+        case CardType.ROLL: return "Roll";
         
         // Safety
-        case "drivingAce": return "Driving Ace";
-        case "fuelTruck": return "Extra Tank";
-        case "punctureProof": return "Puncture-Proof";
-        case "rightOfWay": return "Right of Way";
+        case CardType.DRIVING_ACE: return "Driving Ace";
+        case CardType.FUEL_TANK: return "Extra Tank";
+        case CardType.PUNCTURE_PROOF: return "Puncture-Proof";
+        case CardType.RIGHT_OF_WAY: return "Right of Way";
         
         default: return "Unknown";
       }
@@ -87,19 +84,19 @@
   
   <div 
     class={cardClasses}
-    style={card ? `--card-color: ${getCardColor(card.type)};` : ''}
+    style={card ? `--card-color: ${getCardColor(card.category, card.type)};` : ''}
   >
     {#if card}
       <div class="card-inner">
         <div class="card-header">
-          <span class="card-type">{getCardName(card.type, card.effect)}</span>
-          <span class="card-icon">{getCardIcon(card.type, card.effect)}</span>
+          <span class="card-type">{card.category}</span>
+          <span class="card-icon">{getCardIcon(card.category, card.type)}</span>
         </div>
         <div class="card-body">
-          {#if card.type === "distance"}
+          {#if card.category === "distance"}
             <div class="card-distance">{card.value}</div>
           {:else}
-            <div class="card-description">{getCardName(card.type, card.effect)}</div>
+            <div class="card-description">{getCardName(card.category, card.type)}</div>
           {/if}
         </div>
         <div class="card-footer">

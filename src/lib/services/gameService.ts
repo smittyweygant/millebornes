@@ -13,7 +13,7 @@ import {
   gameOver,
   winner
 } from '../stores/gameStore';
-import { checkWinCondition } from '../utils/gameRules';
+import { checkWinCondition } from '../utils/gameRulesEngine';
 import { CardType, CardCategory } from '../types/cardTypes';
 
 // Central game service to handle all game actions

@@ -9,8 +9,8 @@ export interface GameState {
   playerHands: Record<string, Card[]>;
   playArea: Record<string, Card[]>;
   playerState: Record<string, PlayerStatus>;
-  activeHazards: Record<string, CardEffect[]>;
-  activeSafeties: Record<string, CardEffect[]>;
+  activeHazards: Record<string, Card[]>;
+  activeSafeties: Record<string, Card[]>;
   playerDistances: Record<string, number>;
   currentPlayer: string;
   createdAt: Date;

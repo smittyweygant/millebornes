@@ -3,11 +3,10 @@
     import { db } from "$lib/firebase";
     import { collection, addDoc, doc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
     import { FirebaseService } from '$lib/services/firebaseService';
-    import GameBoard from '$lib/components/GameBoard.svelte';
     import CardComponent from '$lib/components/Card.svelte';
     import { gameStore } from "$lib/stores/gameStore";
-    import { hazardRemedyPairs, safetyProtections } from "$lib/utils/gameRules";
-    import type { Card, CardEffect } from "$lib/types/cardTypes";
+    import { hazardRemedyPairs, safetyProtections } from "$lib/utils/gameRulesEngine";
+    import { type Card, CardType, CardEffect } from "$lib/types/cardTypes";
     import type { PlayerStatus, GameState } from "$lib/types/gameTypes";
 
     let gameId: string | null = null;
@@ -50,6 +49,8 @@
     async function createGame() {
       try {
         const newGameId = await fbService.createNewGame();
+        console.log('New game created with ID:', newGameId);
+        console.log('Test reading enums:', newGameId);
         gameId = newGameId;
         playerId = "player1";
         isHost = true;
@@ -81,6 +82,7 @@
       gameId = null;
       playerId = null;
       gameStore.set({
+        createdAt: null,
         players: [],
         deck: [],
         discardPile: [],
@@ -131,8 +133,11 @@
       if (!gameId) return;
       const gameRef = doc(db, "games", gameId);
 
-      switch (card.type) {
+      console.log("Playing card:", card.type, "Category:", card.category);
+
+      switch (card.category) {
         case "distance": {
+          console.log("Playing distance card:", card.value);
           if ($gameStore.playerState[playerId] !== "moving") {
             turnShouldEnd = false;
             break;
@@ -154,18 +159,32 @@
         case "hazard": {
           const allPlayers = Object.keys($gameStore.playerHands);
           const targetPlayer = allPlayers.find(p => p !== playerId);
-          if (!targetPlayer || !card.effect) {
+          console.log("Playing hazard card:", card.type, "Target player:", targetPlayer);
+          if (!targetPlayer || !card.type) {
             turnShouldEnd = false;
             break;
           }
 
-          const protection = safetyProtections[card.effect];
-          if (protection && $gameStore.activeSafeties[targetPlayer]?.includes(protection)) {
-            turnShouldEnd = false;
-            break;
+          // Check if target player has safety protection against this hazard
+          const hasProtection = $gameStore.activeSafeties[targetPlayer]?.some(safetyCard => {
+              // Special case: Right of Way protects against both Stop and Speed Limit
+              if ((card.type === CardType.STOP || card.type === CardType.SPEED_LIMIT) && 
+                  safetyCard.type === CardType.RIGHT_OF_WAY) {
+                  return true;
+              }
+              // Check other safety protections using the mapping
+              return safetyProtections[card.type] === safetyCard.effect;
+          });
+
+          if (hasProtection) {
+              // If player has safety protection, hazard is ineffective
+              turnShouldEnd = false;
+              break;
           }
 
-          const hazards = [...($gameStore.activeHazards[targetPlayer] || []), card.effect];
+
+          const hazards: Card[] = [...($gameStore.activeHazards[targetPlayer] || []), card];
+          console.log("New hazards for target player:", hazards);
           await updateDoc(gameRef, {
             [`activeHazards.${targetPlayer}`]: hazards,
             [`playerState.${targetPlayer}`]: "blocked!" as PlayerStatus,
@@ -181,21 +200,21 @@
         }
 
         case "remedy": {
-          if (!card.effect) {
+          if (!card.type) {
             turnShouldEnd = false;
             break;
           }
 
           const hazardToRemove = Object.entries(hazardRemedyPairs)
-            .find(([_, remedy]) => remedy === card.effect)?.[0] as CardEffect;
+            .find(([_, remedy]) => remedy === card.effect)?.[0] as CardType;
 
-          if (!hazardToRemove || !$gameStore.activeHazards[playerId]?.includes(hazardToRemove)) {
-            turnShouldEnd = false;
-            break;
-          }
+          // if (!hazardToRemove || !$gameStore.activeHazards[playerId]?.includes(hazardToRemove)) {
+          //   turnShouldEnd = false;
+          //   break;
+          // }
 
           const hazards = $gameStore.activeHazards[playerId]
-            .filter(h => h !== hazardToRemove);
+            .filter(h => h.type !== hazardToRemove);
 
           const newPlayerState: PlayerStatus = hazards.length === 0 ? "moving" : "blocked!";
           
@@ -215,12 +234,12 @@
         }
 
         case "safety": {
-          if (!card.effect) {
+          if (!card.type) {
             turnShouldEnd = false;
             break;
           }
 
-          const safeties = [...($gameStore.activeSafeties[playerId] || []), card.effect];
+          const safeties = [...($gameStore.activeSafeties[playerId] || []), card];
           await updateDoc(gameRef, {
             [`activeSafeties.${playerId}`]: safeties,
             [`playerHands.${playerId}`]: remainingHand
@@ -336,7 +355,7 @@
                     <h4>Safety Protections</h4>
                     <div class="safety-cards">
                       {#each $gameStore.activeSafeties[player] as safety}
-                        <CardComponent card={{ type: "safety", effect: safety }} />
+                        <CardComponent card = {safety} />
                       {/each}
                     </div>
                   </section>
@@ -347,7 +366,7 @@
                     <h4>Hazards!</h4>
                     <div class="hazard-cards">
                       {#each $gameStore.activeHazards[player] as hazard}
-                        <CardComponent card={{ type: "hazard", effect: hazard }} />
+                        <CardComponent card= {hazard} />
                       {/each}
                     </div>
                   </section>

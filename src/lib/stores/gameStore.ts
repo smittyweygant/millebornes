@@ -4,14 +4,15 @@ import type { GameState, PlayerStatus } from '../types/gameTypes';
 
 // Game state interface
 export interface GameStoreState {
+  createdAt: Date | null;
   players: string[];
   deck: Card[];
   discardPile: Card[];
   playerHands: Record<string, Card[]>;
   playArea: Record<string, Card[]>;
   playerState: Record<string, PlayerStatus>;
-  activeHazards: Record<string, CardEffect[]>;
-  activeSafeties: Record<string, CardEffect[]>;
+  activeHazards: Record<string, Card[]>;
+  activeSafeties: Record<string, Card[]>;
   currentPlayer: string;
   gameOver: boolean;
   winner: string | null;
@@ -19,6 +20,7 @@ export interface GameStoreState {
 
 // Create the main game store with a consistent initial state
 const createInitialState = (): GameStoreState => ({
+  createdAt: null,
   players: [],
   deck: [],
   discardPile: [],
@@ -59,7 +61,7 @@ const createStore = () => {
         discardPile: [...state.discardPile, card]
       }));
     },
-    addHazard: (playerId: string, hazard: CardEffect) => {
+    addHazard: (playerId: string, hazard: Card) => {
       updateState(state => ({
         ...state,
         activeHazards: {
@@ -68,7 +70,7 @@ const createStore = () => {
         }
       }));
     },
-    removeHazard: (playerId: string, hazard: CardEffect) => {
+    removeHazard: (playerId: string, hazard: Card) => {
       updateState(state => ({
         ...state,
         activeHazards: {
@@ -77,7 +79,7 @@ const createStore = () => {
         }
       }));
     },
-    addSafety: (playerId: string, safety: CardEffect) => {
+    addSafety: (playerId: string, safety: Card) => {
       updateState(state => ({
         ...state,
         activeSafeties: {
@@ -130,7 +132,7 @@ export const playerDistances = derived(
 // Helper functions
 function calculateDistance(cards: Card[]): number {
   return cards
-    .filter(card => card.type === "distance")
+    .filter(card => card.category === "distance")
     .reduce((total, card) => total + (card.value || 0), 0);
 }
 
@@ -142,6 +144,7 @@ export function initializeGameState(gameData: GameState) {
   if (!gameData) return;
   
   const state: GameStoreState = {
+    createdAt: gameData.createdAt, 
     players: gameData.players,
     deck: gameData.deck,
     discardPile: gameData.discardPile,
